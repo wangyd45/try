@@ -1,0 +1,94 @@
+ansible-playbook -i hosts-3.7 openshift-ansible/playbooks/byo/openshift-etcd/migrate.yml
+
+
+etcdctl backup --data-dir /var/lib/etcd --backup-dir /var/lib/etcd/bak
+
+
+cp /var/lib/etcd/member/snap/db /var/lib/etcd/bak/member/snap/db
+
+
+备份etcd
+ ansible -i machine master -m shell -a "mkdir /var/lib/etcd/bak"
+ ansible -i machine master -m shell -a "etcdctl backup --data-dir /var/lib/etcd --backup-dir /var/lib/etcd/bak"
+ ansible -i machine master -m shell -a "cp /var/lib/etcd/member/snap/db /var/lib/etcd/bak/member/snap/db"
+ ansible-playbook -i hosts-3.7 3.7/openshift-ansible/playbooks/byo/openshift-etcd/migrate.yml
+ 
+停止master服务
+ ansible -i machine master -m shell -a "systemctl stop origin-master-api origin-master-controllers"
+ 
+健康检查
+ etcdctl --cert-file=/etc/etcd/peer.crt \
+    --key-file=/etc/etcd/peer.key \
+    --ca-file=/etc/etcd/ca.crt \
+    --peers="https://10.19.14.19:2379,https://10.19.14.20:2379,https://10.19.14.21:2379" \
+    cluster-health
+	
+	
+ ETCDCTL_API=3 etcdctl --cert=/etc/etcd/peer.crt \
+    --key=/etc/etcd/peer.key \
+    --cacert=/etc/etcd/ca.crt \
+    --endpoints="https://10.19.14.19:2379,https://10.19.14.20:2379,https://10.19.14.21:2379" \
+    -w table endpoint status
+	
+停止etcd服务
+ ansible -i machine master -m shell -a "systemctl stop etcd_container"
+ 
+etcd数据v2升级v3
+第一台机器执行  ETCDCTL_API=3 etcdctl migrate --data-dir=/var/lib/etcd
+剩余机器执行    mv /var/lib/etcd/member /var/lib/etcd/member.old
+
+
+创建一个新的集群在第一个机器
+ echo "ETCD_FORCE_NEW_CLUSTER=true" >> /etc/etcd/etcd.conf
+ systemctl start etcd_container
+ sed -i '/ETCD_FORCE_NEW_CLUSTER=true/d' /etc/etcd/etcd.conf
+ systemctl restart etcd_container
+ 
+ 
+ttlxxxxx
+oadm migrate etcd-ttl --etcd-address=https://10.19.14.19:2379 \
+    --cacert=/etc/origin/master/master.etcd-ca.crt \
+    --cert=/etc/origin/master/master.etcd-client.crt \
+    --key=/etc/origin/master/master.etcd-client.key \
+    --ttl-keys-prefix '/kubernetes.io/events' \
+    --lease-duration 1h
+	
+	
+oadm migrate etcd-ttl --etcd-address=https://10.19.14.19:2379 \
+    --cacert=/etc/origin/master/master.etcd-ca.crt \
+    --cert=/etc/origin/master/master.etcd-client.crt \
+    --key=/etc/origin/master/master.etcd-client.key \
+    --ttl-keys-prefix '/kubernetes.io/masterleases' \
+    --lease-duration 10s
+
+oadm migrate etcd-ttl --etcd-address=https://10.19.14.19:2379 \
+    --cacert=/etc/origin/master/master.etcd-ca.crt \
+    --cert=/etc/origin/master/master.etcd-client.crt \
+    --key=/etc/origin/master/master.etcd-client.key \
+    --ttl-keys-prefix '/openshift.io/oauth/accesstokens' \
+    --lease-duration 86400s
+	
+oadm migrate etcd-ttl --etcd-address=https://10.19.14.19:2379 \
+    --cacert=/etc/origin/master/master.etcd-ca.crt \
+    --cert=/etc/origin/master/master.etcd-client.crt \
+    --key=/etc/origin/master/master.etcd-client.key \
+    --ttl-keys-prefix '/openshift.io/oauth/authorizetokens' \
+    --lease-duration 500s
+ 
+oadm migrate etcd-ttl --etcd-address=https://10.19.14.19:2379 \
+    --cacert=/etc/origin/master/master.etcd-ca.crt \
+    --cert=/etc/origin/master/master.etcd-client.crt \
+    --key=/etc/origin/master/master.etcd-client.key \
+    --ttl-keys-prefix '/openshift.io/leases/controllers' \
+    --lease-duration 10s
+ 
+ 
+重启master
+ansible -i machine master -m shell -a "systemctl restart origin-master-api origin-master-controllers"
+
+
+3.6升级3.7
+
+ 
+
+
